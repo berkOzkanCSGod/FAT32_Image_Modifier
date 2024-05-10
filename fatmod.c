@@ -127,7 +127,7 @@ unsigned int* traceCluster(unsigned char* FAT, int startingCluster, int* size) {
     unsigned int temp[cluster_count];
     temp[0] = currentClusterNumber;
     int increment = 0;
-    int index = 1;
+    int index = 0;
     do {
         // printf("LE: 0x%02X%02X%02X%02X\n", 
         //         FAT[4*currentClusterNumber + 3], 
@@ -145,9 +145,8 @@ unsigned int* traceCluster(unsigned char* FAT, int startingCluster, int* size) {
         currentClusterNumber = entry_value;
 
         if (entry_value > 0 && entry_value < FFFFFFF8) {
-            printf("V: %u\n", entry_value);
-            temp[index] = currentClusterNumber;
             index++;
+            temp[index] = currentClusterNumber;
         }
     } while (entry_value < FFFFFFF8 && entry_value > 0 && currentClusterNumber < cluster_count);
 
@@ -171,15 +170,88 @@ void display_root(int fd) {
     //printing FAT
     unsigned char* FAT = getFAT(fd);
     int size = 0;
-    unsigned int* clusterChain = traceCluster(FAT, 4, &size);
+    unsigned int* clusterChain = traceCluster(FAT, 2, &size);
+
+    //first 8 bytes: name
+    //9,10, and 11 bytes: extention
+    //name = done/
+
+    unsigned char fileName[8];
+    unsigned char fileExte[3];
+    unsigned char fileSize[4];
+    int dentry_length = 32;
 
     for (int i = 0; i < size; i++) {
-        printf("%d ", clusterChain[i]);
+        getCluster(fd, cluster, clusterChain[i]);
+        // print_cluster(cluster);
+        for (int k = 1; k < CLUSTERSIZE / dentry_length; k++) {
+
+                // for (int i = k*32; i < k*32+32; i++){
+                //     if (i == 0 || i % 16 == 0) {
+                //         printf("\n");
+                //     }
+
+                //     if (cluster[i] != 0) {
+                //         printf("\x1B[31m"); // Red color
+                //         printf("%02X ", cluster[i]);
+                //         printf("\x1B[0m"); // Reset color
+                //     } else {
+                //         printf("%02X ", cluster[i]);
+                //     }
+                // }
+
+            int offset = k*32;
+            if (cluster[offset+i] == 0)
+                break;
+            
+            for (int i = 0; i < 32; i++) {
+                if (i < 8) {
+                    fileName[i] = cluster[offset+i];
+                }
+                if (i >= 8 && i < 11) {
+                    fileExte[i-8] = cluster[offset+i];
+                }
+                if (i > 27 && i < 32) {
+                    fileSize[i-28] = cluster[offset+i];
+                }
+            }
+
+            for (int j = 0; j < 8; j++) {
+                printf("%c",fileName[j]);
+            }
+            printf(".");
+            for (int j = 0; j < 3; j++) {
+                printf("%c",fileExte[j]);
+            }
+            printf(" ");
+            //little endian parse:
+            int size = (  (int)((uint8_t)fileSize[0]) 
+                        | (int)((uint8_t)fileSize[1]) << 8 
+                        | (int)((uint8_t)fileSize[2]) << 16 
+                        | (int)((uint8_t)fileSize[3]) << 24  );
+            printf("%d", size);
+            
+            printf("\n");
+        }
+        printf("\n");
+
     }
 
-    printf("\nFAT Mini\n");
-    print_FAT_mini(FAT);
-    //printing some clusters
+
+
+    // for (int i = 0; i < size; i++) {
+    //     printf("%d ", clusterChain[i]);
+    // }
+
+    // printf("\nFAT Mini\n");
+    // print_FAT_mini(FAT);
+    // printing some clusters
+    // printf("\ncluster 0\n");
+    // getCluster(fd, cluster, 0);
+    // print_cluster(cluster);
+    // printf("\ncluster 1\n");
+    // getCluster(fd, cluster, 1);
+    // print_cluster(cluster);
     // printf("\ncluster 2\n");
     // getCluster(fd, cluster, 2);
     // print_cluster(cluster);
@@ -188,10 +260,10 @@ void display_root(int fd) {
     // print_cluster(cluster);
     // printf("\ncluster 4\n");
     // getCluster(fd, cluster, 4);
-    // print_cluster(cluster);
+    // print_cluster(cluster);  
     // printf("\ncluster 5\n");
     // getCluster(fd, cluster, 5);
-    // print_cluster(cluster);
+    // print_cluster(cluster);  
 }
 
 
