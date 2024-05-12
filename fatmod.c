@@ -22,6 +22,7 @@
 
 int readsector(int fd, unsigned char *buf, unsigned int snum);
 int writesector(int fd, unsigned char *buf, unsigned int snum);
+int findFreeCluster(unsigned char* FAT, int FAT_start, int FAT_end);
 unsigned int allocate_block(int fd, unsigned int last_block);
 void getCluster(int fd, unsigned char* cluster, int cluster_num);
 void print_cluster(unsigned char* cluster);
@@ -36,10 +37,10 @@ void display_contents(int fd, char* fName);
 void display_raw_contents(int fd, char* fName);
 void display_help();
 void writeFAT(int fd, unsigned char* FAT);
+void markClusterAsUsed(unsigned char* FAT, int cluster);
 unsigned char* getFAT(int fd);
 unsigned int* traceCluster(unsigned char* FAT, int startingCluster, int* size);
 void clearClusterChain(unsigned char* FAT, int startingCluster);
-
 
 //general purpose buffers
 unsigned char sector[SECTORSIZE];    
@@ -129,7 +130,7 @@ int writesector(int fd, unsigned char *buf, unsigned int snum) {
 	offset = snum * SECTORSIZE;
 	lseek (fd, offset, SEEK_SET);
 	n  = write (fd, buf, SECTORSIZE);
-        fsync (fd);
+    fsync (fd);
 
     return n == SECTORSIZE ? 0 : -1;
 }
@@ -224,6 +225,31 @@ void clearClusterChain(unsigned char* FAT, int startingCluster) {
 
         currentClusterNumber = entry_value;
     } while (entry_value < 0x0FFFFFF8 && entry_value > 0);
+}
+
+void markClusterAsUsed(unsigned char* FAT, int cluster) {
+    // Set the FAT entry for the cluster to 0x0FFFFFFF
+    FAT[4*cluster + 0] = 0xFF;
+    FAT[4*cluster + 1] = 0xFF;
+    FAT[4*cluster + 2] = 0xFF;
+    FAT[4*cluster + 3] = 0x0F;
+}
+
+// Find the first free cluster in the FAT
+int findFreeCluster(unsigned char* FAT, int FAT_start, int FAT_end) {
+    int freeCluster = -1;
+    int FATSIZE = (FAT_end - FAT_start) * (SECTORSIZE / 4);
+    for (int k = 2; k < FATSIZE; k++) {
+        uint32_t entry_value = ((uint32_t)((uint8_t)FAT[4*k + 0]) 
+                            | (uint32_t)((uint8_t)FAT[4*k + 1]) << 8 
+                            | (uint32_t)((uint8_t)FAT[4*k + 2]) << 16 
+                            | (uint32_t)((uint8_t)FAT[4*k + 3]) << 24);
+        if (entry_value == 0x00000000) {
+            freeCluster = k;
+            break;
+        }
+    }
+    return freeCluster;
 }
 
 void writeCluster(int fd, unsigned char* buf, unsigned int clusterNumber) {
@@ -529,18 +555,7 @@ void create_file(int fd, char* filename) {
     dep->size = 0;
 
     // Find a free cluster in the FAT
-    int freeCluster = -1;
-    int FATSIZE = (FAT_end - FAT_start) * (SECTORSIZE / 4);
-    for (int k = 2; k < FATSIZE; k++) {
-        uint32_t entry_value = ((uint32_t)((uint8_t)FAT[4*k + 0]) 
-                            | (uint32_t)((uint8_t)FAT[4*k + 1]) << 8 
-                            | (uint32_t)((uint8_t)FAT[4*k + 2]) << 16 
-                            | (uint32_t)((uint8_t)FAT[4*k + 3]) << 24);
-        if (entry_value == 0x00000000) {
-            freeCluster = k;
-            break;
-        }
-    }
+    int freeCluster = findFreeCluster(FAT, FAT_start, FAT_end);
     if (freeCluster == -1) {
         printf("Disk is full\n");
         return;
@@ -630,132 +645,89 @@ void delete_file(int fd, char* filename) {
     writeCluster(fd, cluster, clusterChain[j]);
 }
 
-void write_file(int fd, char* filename, int offset, int n, unsigned char data) { //NOT WORKING, NEED UPDATES TO WORK FOR FAT32
-    // Get the root directory
-    unsigned char root[CLUSTERSIZE * N_ROOTDIR_CLUSTERS];
-    getCluster(fd, root, 2);  // Assuming root directory is at cluster 2
+void write_file(int fd, char* filename, int offset, int n, unsigned char data) {
+    // Get the FAT and trace the root directory clusters
+    unsigned char* FAT = getFAT(fd);
+    int size = 0;
+    unsigned int* clusterChain = traceCluster(FAT, 2, &size);
+
+    // Convert filename to uppercase
+    char filename_copy[strlen(filename) + 1];
+    strcpy(filename_copy, filename);
+    for (int i = 0; i < strlen(filename_copy); i++) {
+        filename_copy[i] = toupper(filename_copy[i]);
+    }
 
     // Find the directory entry for the file
-    int i;
-    for (i = 0; i < CLUSTERSIZE * N_ROOTDIR_CLUSTERS; i += 32) {
-        char name[9], ext[4];
-        strncpy(name, (char*)&root[i], 8);
-        strncpy(ext, (char*)&root[i + 8], 3);
-        name[8] = '\0';  // Null-terminate the strings
-        ext[3] = '\0';
+    int i, j;
+    struct msdos_dir_entry* dep;
+    int dep_size = sizeof(struct msdos_dir_entry);
+    for (j = 0; j < size; j++) {
+        getCluster(fd, cluster, clusterChain[j]);
+        dep = (struct msdos_dir_entry*) cluster;
+        for (i = 0; i < CLUSTERSIZE; i += dep_size, dep++) {
+            char name[9], ext[4];
+            strncpy(name, (char*)dep->name, 8);
+            strncpy(ext, (char*)dep->name + 8, 3);
+            name[8] = '\0'; 
+            ext[3] = '\0';
+            trimTrailingSpaces(name);
+            char full_filename[13];
+            sprintf(full_filename, "%s.%s", name, ext); 
 
-        char full_filename[13];
-        sprintf(full_filename, "%s.%s", name, ext);  // Combine the name and extension
-
-        if (strcmp(full_filename, filename) == 0) {
-            // This is the directory entry for the file
+            if (strcmp(full_filename, filename_copy) == 0) {
+                // This is the directory entry for the file
+                break;
+            }
+        }
+        if (i < CLUSTERSIZE) {
+            // Found the directory entry
             break;
         }
     }
 
-    if (i == CLUSTERSIZE * N_ROOTDIR_CLUSTERS) {
+    if (j == size) {
         printf("File not found\n");
         return;
     }
 
-    // Get the first cluster number of the file
-    unsigned int first_cluster = root[i + 26] | (root[i + 27] << 8);
+    // Calculate the number of clusters needed
+    int clusters_needed = (offset + n + CLUSTERSIZE - 1) / CLUSTERSIZE;
 
-    // Calculate which block the offset falls within
-    int block_num = offset / CLUSTERSIZE;
-    int block_offset = offset % CLUSTERSIZE;
+    // Trace the file's clusters
+    size = 0;
+    unsigned int* fileClusterChain = traceCluster(FAT, dep->start | (dep->starthi << 16), &size);
 
-    // Get the FAT
-    unsigned char* FAT = getFAT(fd);
-
-    // Traverse the FAT to find the block
-    unsigned int cluster = first_cluster;
-    for (int j = 0; j < block_num; j++) {
-        unsigned int next_cluster = FAT[cluster * 2] | (FAT[cluster * 2 + 1] << 8);
-        if (next_cluster == 0xFFFF) {
-            // Need to allocate a new block
-            next_cluster = allocate_block(fd, cluster);
-            if (next_cluster == 0xFFFF) {
-                printf("No free blocks\n");
-                return;
-            }
-            // Update the FAT
-            FAT[cluster * 2] = next_cluster & 0xFF;
-            FAT[cluster * 2 + 1] = (next_cluster >> 8) & 0xFF;
+    // Allocate new clusters if necessary
+    while (size < clusters_needed) {
+        int freeCluster = findFreeCluster(FAT, FAT_start, FAT_end);
+        if (freeCluster == -1) {
+            printf("Disk is full\n");
+            return;
         }
-        cluster = next_cluster;
+        markClusterAsUsed(FAT, freeCluster);
+        fileClusterChain = realloc(fileClusterChain, (size + 1) * sizeof(unsigned int));
+        fileClusterChain[size] = freeCluster;
+        size++;
     }
 
-    // Read the block
-    unsigned char block[CLUSTERSIZE];
-    getCluster(fd, block, cluster);
-
-    // Write the data to the block
-    for (int j = 0; j < n; j++) {
-        if (block_offset + j >= CLUSTERSIZE) {
-            // Need to allocate a new block
-            unsigned int new_cluster = allocate_block(fd, cluster);
-            if (new_cluster == 0xFFFF) {
-                printf("No free blocks\n");
-                return;
-            }
-            // Update the FAT
-            FAT[cluster * 2] = new_cluster & 0xFF;
-            FAT[cluster * 2 + 1] = (new_cluster >> 8) & 0xFF;
-            cluster = new_cluster;
-            // Read the new block
-            getCluster(fd, block, cluster);
-            block_offset = 0;
-        }
-        block[block_offset + j] = data;
+    // Write the data to the file
+    for (int k = 0; k < n; k++) {
+        int clusterIndex = (offset + k) / CLUSTERSIZE;
+        int clusterOffset = (offset + k) % CLUSTERSIZE;
+        getCluster(fd, cluster, fileClusterChain[clusterIndex]);
+        cluster[clusterOffset] = data;
+        writeCluster(fd, cluster, fileClusterChain[clusterIndex]);
     }
 
-    // Write the block back to disk
-    writesector(fd, block, cluster);
-}
+    // Update the file size
+    dep->size = max(dep->size, offset + n);
 
-unsigned int allocate_block(int fd, unsigned int last_block) {
-    // Get the FAT
-    unsigned char* FAT = getFAT(fd);
+    // Write the updated FAT back to the disk
+    writeFAT(fd, FAT);
 
-    // Get the number of clusters in the file system
-    unsigned int cluster_count = boot->fat32.length * 512 / 4;
-
-    // Find a free block
-    unsigned int new_block;
-    for (new_block = 2; new_block < cluster_count; new_block++) {
-        unsigned int entry = FAT[new_block * 4] | (FAT[new_block * 4 + 1] << 8) | (FAT[new_block * 4 + 2] << 16) | (FAT[new_block * 4 + 3] << 24);
-        if (entry == 0x00000000) {
-            // This is a free block
-            break;
-        }
-    }
-
-    if (new_block >= cluster_count) {
-        // No free blocks
-        return 0xFFFF;
-    }
-
-    // Mark the block as used and end of file
-    FAT[new_block * 4] = 0xFF;
-    FAT[new_block * 4 + 1] = 0xFF;
-    FAT[new_block * 4 + 2] = 0xFF;
-    FAT[new_block * 4 + 3] = 0x0F;
-
-    // Link the block to the file
-    unsigned int last_entry = FAT[last_block * 4] | (FAT[last_block * 4 + 1] << 8) | (FAT[last_block * 4 + 2] << 16) | (FAT[last_block * 4 + 3] << 24);
-    last_entry = new_block;
-    FAT[last_block * 4] = last_entry & 0xFF;
-    FAT[last_block * 4 + 1] = (last_entry >> 8) & 0xFF;
-    FAT[last_block * 4 + 2] = (last_entry >> 16) & 0xFF;
-    FAT[last_block * 4 + 3] = (last_entry >> 24) & 0xFF;
-
-    // Write the FAT back to disk
-    for (int i = 0; i < cluster_count / SECTORSIZE; i++) {
-        writesector(fd, &FAT[i * SECTORSIZE], i + 1);
-    }
-
-    return new_block;
+    // Write the updated directory entry back to the disk
+    writeCluster(fd, cluster, clusterChain[j]);
 }
 
 void print_cluster(unsigned char* cluster) {
