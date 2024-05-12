@@ -463,10 +463,19 @@ void writeFAT(int fd, unsigned char* FAT) {
     int FAT_length = FAT_end - FAT_start;
 
     // Write the FAT back to the disk image sector by sector
-    int iteration = 0;
-    for (int i = FAT_start; i < FAT_end; i++, iteration++) {
-        writesector(fd, FAT + (iteration * SECTORSIZE), i);
+    for (int i = 0; i < FAT_length; i++) {
+        writesector(fd, FAT + (i * SECTORSIZE), FAT_start + i);
+
+        // Calculate the progress percentage
+        int progress = (i + 1) * 100 / FAT_length;
+
+        // Print the progress percentage
+        printf("\rWriting back to FAT Table. Completed: %d%%", progress);
+        fflush(stdout); // Make sure the percentage is immediately printed
     }
+
+    // Print a newline at the end to move the cursor to the next line
+    printf("\n");
 }
 
 void create_file(int fd, char* filename) {
@@ -474,14 +483,14 @@ void create_file(int fd, char* filename) {
     unsigned char* FAT = getFAT(fd);
     int size = 0;
     unsigned int* clusterChain = traceCluster(FAT, 2, &size);
-
     // Find an empty directory entry
     int i, j;
     struct msdos_dir_entry* dep;
+    int dep_size = sizeof(struct msdos_dir_entry);
     for (j = 0; j < size; j++) {
         getCluster(fd, cluster, clusterChain[j]);
         dep = (struct msdos_dir_entry*) cluster;
-        for (i = 0; i < CLUSTERSIZE; i += sizeof(struct msdos_dir_entry), dep++) {
+        for (i = 0; i < CLUSTERSIZE; i += dep_size, dep++) {
             if (dep->name[0] == 0x00 || dep->name[0] == 0xE5) {
                 // This directory entry is empty
                 break;
@@ -570,10 +579,11 @@ void delete_file(int fd, char* filename) {
     // Find the directory entry for the file
     int i, j;
     struct msdos_dir_entry* dep;
+    int dep_size = sizeof(struct msdos_dir_entry);
     for (j = 0; j < size; j++) {
         getCluster(fd, cluster, clusterChain[j]);
         dep = (struct msdos_dir_entry*) cluster;
-        for (i = 0; i < CLUSTERSIZE; i += sizeof(struct msdos_dir_entry), dep++) {
+        for (i = 0; i < CLUSTERSIZE; i += dep_size, dep++) {
             char name[9], ext[4];
             strncpy(name, (char*)dep->name, 8);
             strncpy(ext, (char*)dep->name + 8, 3);
