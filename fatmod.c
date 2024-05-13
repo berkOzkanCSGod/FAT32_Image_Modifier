@@ -721,7 +721,7 @@ void write_file(int fd, char* filename, int offset, int n, unsigned char data) {
     }
 
     // Update the file size
-    dep->size = max(dep->size, offset + n);
+    dep->size = (dep->size > offset + n) ? dep->size : offset + n;
 
     // Write the updated FAT back to the disk
     writeFAT(fd, FAT);
