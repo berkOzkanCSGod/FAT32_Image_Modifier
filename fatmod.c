@@ -18,13 +18,11 @@
 #define __0FFFFFFF 268435455 //anther magic number
 #define SECTORSIZE 512   // bytes
 #define CLUSTERSIZE  1024  // bytes
-
-#define N_ROOTDIR_CLUSTERS 2 //how many clusters root dir has. (not sure about this yet)
+#define N_ROOTDIR_CLUSTERS 2 //how many clusters root dir has
 
 int readsector(int fd, unsigned char *buf, unsigned int snum);
 int writesector(int fd, unsigned char *buf, unsigned int snum);
 int findFreeCluster(unsigned char* FAT, int FAT_start, int FAT_end);
-unsigned int allocate_block(int fd, unsigned int last_block);
 void getCluster(int fd, unsigned char* cluster, int cluster_num);
 void print_cluster(unsigned char* cluster);
 void print_FAT(unsigned char* sector);
@@ -254,18 +252,19 @@ int findFreeCluster(unsigned char* FAT, int FAT_start, int FAT_end) {
     return freeCluster;
 }
 
-void writeCluster(int fd, unsigned char* buf, unsigned int clusterNumber) {
-    // Get the number of sectors per cluster and the first data sector from the boot sector
-    unsigned int sectorsPerCluster = boot->sec_per_clus;
-    unsigned int firstDataSector = data_start_sector;
+void writeCluster(int fd, unsigned char* cluster, int cluster_num) {
+    cluster_num -= 2; //to compensate for the fact that clusters start at 2
 
-    // Convert the cluster number to a sector number
-    unsigned int sectorNumber = firstDataSector + (clusterNumber - 2) * sectorsPerCluster;
+    unsigned char first_sector[SECTOR_SIZE];
+    unsigned char second_sector[SECTOR_SIZE];
 
-    // Write the data to each sector in the cluster
-    for (unsigned int i = 0; i < sectorsPerCluster; i++) {
-        writesector(fd, buf + i * SECTOR_SIZE, sectorNumber + i);
-    }
+    // Copy the data from the cluster buffer to the sector buffers
+    memcpy(first_sector, cluster, SECTOR_SIZE);
+    memcpy(second_sector, cluster + SECTOR_SIZE, SECTOR_SIZE);
+
+    // Write the sectors to the correct locations on the disk
+    writesector(fd, first_sector, (data_start_sector + 2 * cluster_num));
+    writesector(fd, second_sector, (data_start_sector + 2 * cluster_num + 1));
 }
 
 void display_root(int fd) {
@@ -335,7 +334,7 @@ void display_contents(int fd, char* fName) {
     int size = 0;
     unsigned int* clusterChain = traceCluster(FAT, 2, &size);
 
-    print_FAT_mini(FAT);
+    //print_FAT_mini(FAT);
 
     int dentry_length = 32;
 
@@ -714,11 +713,17 @@ void write_file(int fd, char* filename, int offset, int n, unsigned char data) {
 
     // Calculate the number of clusters needed
     int clusters_needed = (offset + n + CLUSTERSIZE - 1) / CLUSTERSIZE;
+    // printf("CLUSTERS NEEDED: %d\n", clusters_needed);
 
     // Trace the file's clusters
     size = 0;
     unsigned int* fileClusterChain = traceCluster(FAT, dep->start | (dep->starthi << 16), &size);
-
+    // printf("NUMBER OF CURRENT CLUSTERS = %d\n", size);
+    // printf("BEFORE FINDING EXTRA CLUSTERS:\n");
+    for(int i = 0; i < size; i++){
+        getCluster(fd, cluster, fileClusterChain[i]);
+        print_cluster(cluster);
+    }
     // Allocate new clusters if necessary
     while (size < clusters_needed) {
         int freeCluster = findFreeCluster(FAT, FAT_start, FAT_end);
@@ -726,29 +731,51 @@ void write_file(int fd, char* filename, int offset, int n, unsigned char data) {
             printf("Disk is full\n");
             return;
         }
-        markClusterAsUsed(FAT, freeCluster);
+        // Mark the free cluster as used in the FAT
+        FAT[4*freeCluster + 0] = 0xFF;
+        FAT[4*freeCluster + 1] = 0xFF;
+        FAT[4*freeCluster + 2] = 0xFF;
+        FAT[4*freeCluster + 3] = 0x0F;
         fileClusterChain = realloc(fileClusterChain, (size + 1) * sizeof(unsigned int));
         fileClusterChain[size] = freeCluster;
+        if (size > 0) {
+            // Update the FAT entry for the previously last cluster to point to the new cluster
+            FAT[4*fileClusterChain[size - 1] + 0] = freeCluster & 0xFF;
+            FAT[4*fileClusterChain[size - 1] + 1] = (freeCluster >> 8) & 0xFF;
+            FAT[4*fileClusterChain[size - 1] + 2] = (freeCluster >> 16) & 0xFF;
+            FAT[4*fileClusterChain[size - 1] + 3] = (freeCluster >> 24) & 0x0F;
+        }
         size++;
     }
-
+    // printf("AFTER FINDING EXTRA CLUSTERS:\n");
+    // for(int i = 0; i < size; i++){
+    //     getCluster(fd, cluster, fileClusterChain[i]);
+    //     print_cluster(cluster);
+    // }
     // Write the data to the file
     for (int k = 0; k < n; k++) {
         int clusterIndex = (offset + k) / CLUSTERSIZE;
         int clusterOffset = (offset + k) % CLUSTERSIZE;
-        getCluster(fd, cluster, fileClusterChain[clusterIndex]);
+        int number = fileClusterChain[clusterIndex];
+        getCluster(fd, cluster, number);
         cluster[clusterOffset] = data;
-        writeCluster(fd, cluster, fileClusterChain[clusterIndex]);
+        //print_cluster(cluster);
+        //printf("FILE CLUSTER INDEX = %d\n", clusterIndex);
+        //printf("FILE CLUSTER NUMBER = %d\n", fileClusterChain[clusterIndex]);
+        writeCluster(fd, cluster, number);
     }
+    //printf("WRITING DATA FINISHED.\n");
 
+    getCluster(fd, cluster, clusterChain[j]);
+    //print_cluster(cluster);
     // Update the file size
     dep->size = (dep->size > offset + n) ? dep->size : offset + n;
 
     // Write the updated FAT back to the disk
     writeFAT(fd, FAT);
 
-    // Write the updated directory entry back to the disk
-    writeCluster(fd, cluster, clusterChain[j]);
+    // // Write the updated directory entry back to the correct cluster
+    writeCluster(fd, cluster, clusterChain[j]); // Use the remembered cluster index
 }
 
 void print_cluster(unsigned char* cluster) {
