@@ -15,6 +15,7 @@
 #define FALSE 0
 #define TRUE 1
 #define FFFFFFF8 4294967288 //magic number
+#define __0FFFFFFF 268435455 //anther magic number
 #define SECTORSIZE 512   // bytes
 #define CLUSTERSIZE  1024  // bytes
 
@@ -76,7 +77,7 @@ int main(int argc, char *argv[]) {
 
     if (strcmp(argv[2], "-l") == 0) {
         display_root(disk_fd);
-        print_FAT_mini(getFAT(disk_fd));
+        // print_FAT_mini(getFAT(disk_fd));
     } else if (strcmp(argv[2], "-r") == 0 && argc > 4) {
         if (strcmp(argv[3], "-a") == 0) {
             display_contents(disk_fd, argv[4]);
@@ -177,7 +178,7 @@ unsigned int* traceCluster(unsigned char* FAT, int startingCluster, int* size) {
     unsigned int temp[cluster_count];
     temp[0] = currentClusterNumber;
     int increment = 0;
-    int index = 0;
+    int index = 1;
     do {
         // printf("LE: 0x%02X%02X%02X%02X\n", 
         //         FAT[4*currentClusterNumber + 3], 
@@ -185,20 +186,21 @@ unsigned int* traceCluster(unsigned char* FAT, int startingCluster, int* size) {
         //         FAT[4*currentClusterNumber + 1], 
         //         FAT[4*currentClusterNumber + 0]
         //         );
-
         entry_value =((uint32_t)((uint8_t)FAT[4*currentClusterNumber + increment + 0]) 
                     | (uint32_t)((uint8_t)FAT[4*currentClusterNumber + increment + 1]) << 8 
                     | (uint32_t)((uint8_t)FAT[4*currentClusterNumber + increment + 2]) << 16 
                     | (uint32_t)((uint8_t)FAT[4*currentClusterNumber + increment + 3]) << 24);
 
-        increment += 4;
+        // increment += 4;
         currentClusterNumber = entry_value;
 
-        if (entry_value > 0 && entry_value < FFFFFFF8) {
-            index++;
+        if (entry_value > 0 && entry_value < FFFFFFF8 && entry_value < __0FFFFFFF) {
             temp[index] = currentClusterNumber;
+            index++;
+        } else if (entry_value < 0 && entry_value > FFFFFFF8 && entry_value > __0FFFFFFF) {
+            break;
         }
-    } while (entry_value < FFFFFFF8 && entry_value > 0 && currentClusterNumber < cluster_count);
+    } while (entry_value < FFFFFFF8 && entry_value < __0FFFFFFF && entry_value > 0 && currentClusterNumber < cluster_count);
 
     clusterChain = (unsigned int*)(malloc(sizeof(int)*increment/4));
     for (int i = 0; i < index; i++) {
@@ -278,7 +280,7 @@ void display_root(int fd) {
 
     for (int i = 0; i < size; i++) {
         getCluster(fd, cluster, clusterChain[i]);
-        print_cluster(cluster);
+        // print_cluster(cluster);
         for (int k = 1; k < CLUSTERSIZE / dentry_length; k++) {
             int offset = k*32;
             if (cluster[offset+i] == 0)
@@ -333,8 +335,8 @@ void display_contents(int fd, char* fName) {
     int size = 0;
     unsigned int* clusterChain = traceCluster(FAT, 2, &size);
 
-    unsigned char fileName[8];
-    unsigned char clusterBits[4];
+    print_FAT_mini(FAT);
+
     int dentry_length = 32;
 
     for (int i = 0; i < size; i++) {
@@ -356,14 +358,25 @@ void display_contents(int fd, char* fName) {
             //         }
             //     }
             // printf("\n");
-
+            unsigned char fileName[13] = {0};
+            unsigned char fileExte[3] = {0};
+            unsigned char clusterBits[4] = {0};
+            int nameSize = 0, extSize = 0, j = 0;
             int offset = k*32;
             if (cluster[offset+i] == 0)
                 break;
             
             for (int i = 0; i < 32; i++) {
                 if (i < 8) {
-                    fileName[i] = cluster[offset+i];
+                    if (!isspace(cluster[offset+i])) {
+                        fileName[j] = cluster[offset+i];
+                        nameSize++;
+                        j++;
+                    }
+                }              
+                if (i > 7 && i < 11) {
+                    fileExte[i-8] = cluster[offset+i];
+                    extSize++;
                 }
                 if (i > 19 && i < 22) {
                     clusterBits[i-19] = cluster[offset+i];
@@ -374,14 +387,12 @@ void display_contents(int fd, char* fName) {
             }
             printf("\n");
 
-            char fileNameStr[9]; 
-            strncpy(fileNameStr, (char*)fileName, 8); 
-            fileNameStr[8] = '\0';
-
-            trimTrailingSpaces(fileNameStr);
+            strcat(fileName,".");
+            strcat(fileName, fileExte);
+            fileName[strlen(fileName) - 1] = '\0';
 
             // Compare strings
-            if (strcasecmp(fileNameStr, fName) == 0) {
+            if (strcasecmp(fileName, fName) == 0) {
                 int number = (  (int)((uint8_t)clusterBits[0]) 
                         | (int)((uint8_t)clusterBits[1]) << 8 
                         | (int)((uint8_t)clusterBits[2]) << 16 
@@ -412,8 +423,6 @@ void display_raw_contents(int fd, char* fName) {
     int size = 0;
     unsigned int* clusterChain = traceCluster(FAT, 2, &size);
 
-    unsigned char fileName[8];
-    unsigned char clusterBits[4];
     int dentry_length = 32;
 
     for (int i = 0; i < size; i++) {
@@ -435,6 +444,10 @@ void display_raw_contents(int fd, char* fName) {
             //         }
             //     }
             // printf("\n");
+            unsigned char fileName[13] = {0};
+            unsigned char fileExte[3] = {0};
+            unsigned char clusterBits[4] = {0};
+            int nameSize = 0, extSize = 0, j = 0;
 
             int offset = k*32;
             if (cluster[offset+i] == 0)
@@ -442,7 +455,15 @@ void display_raw_contents(int fd, char* fName) {
             
             for (int i = 0; i < 32; i++) {
                 if (i < 8) {
-                    fileName[i] = cluster[offset+i];
+                    if (!isspace(cluster[offset+i])) {
+                        fileName[j] = cluster[offset+i];
+                        nameSize++;
+                        j++;
+                    }
+                }              
+                if (i > 7 && i < 11) {
+                    fileExte[i-8] = cluster[offset+i];
+                    extSize++;
                 }
                 if (i > 19 && i < 22) {
                     clusterBits[i-19] = cluster[offset+i];
@@ -453,14 +474,12 @@ void display_raw_contents(int fd, char* fName) {
             }
             printf("\n");
 
-            char fileNameStr[9]; 
-            strncpy(fileNameStr, (char*)fileName, 8); 
-            fileNameStr[8] = '\0';
-
-            trimTrailingSpaces(fileNameStr);
+            strcat(fileName,".");
+            strcat(fileName, fileExte);
+            fileName[strlen(fileName) - 1] = '\0';
 
             // Compare strings
-            if (strcasecmp(fileNameStr, fName) == 0) {
+            if (strcasecmp(fileName, fName) == 0) {
                 int number = (  (int)((uint8_t)clusterBits[0]) 
                         | (int)((uint8_t)clusterBits[1]) << 8 
                         | (int)((uint8_t)clusterBits[2]) << 16 
@@ -471,6 +490,8 @@ void display_raw_contents(int fd, char* fName) {
                 for (int i = 0; i < size; i++) {
                     struct msdos_dir_entry* dentry;
                     getCluster(fd, cluster, clusterChain[i]);
+                    dentry = (struct msdos_dir_entry*) cluster;
+                    // printf("%s", dentry->name);
                     print_cluster(cluster);
                 }
 
