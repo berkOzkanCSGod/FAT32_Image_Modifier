@@ -83,17 +83,17 @@ int main(int argc, char *argv[]) {
             display_raw_contents(disk_fd, argv[4]);
         }
     } else if (strcmp(argv[2], "-c") == 0 && argc > 3) {
-        display_root(disk_fd);
-        print_FAT_mini(getFAT(disk_fd));
+        //display_root(disk_fd);
+        //print_FAT_mini(getFAT(disk_fd));
         create_file(disk_fd, argv[3]);
-        display_root(disk_fd);
-        print_FAT_mini(getFAT(disk_fd));
+        //display_root(disk_fd);
+        //print_FAT_mini(getFAT(disk_fd));
     } else if (strcmp(argv[2], "-d") == 0 && argc > 3) {
-        display_root(disk_fd);
-        print_FAT_mini(getFAT(disk_fd));
+        //display_root(disk_fd);
+        //print_FAT_mini(getFAT(disk_fd));
         delete_file(disk_fd, argv[3]);
-        display_root(disk_fd);
-        print_FAT_mini(getFAT(disk_fd));
+        //display_root(disk_fd);
+        //print_FAT_mini(getFAT(disk_fd));
     } else if (strcmp(argv[2], "-w") == 0 && argc > 6) {
         write_file(disk_fd, argv[3], atoi(argv[4]), atoi(argv[5]), atoi(argv[6]));
     } else {
@@ -529,6 +529,43 @@ void create_file(int fd, char* filename) {
     unsigned char* FAT = getFAT(fd);
     int size = 0;
     unsigned int* clusterChain = traceCluster(FAT, 2, &size);
+    // Check if the file already exists
+    char filename_copy[strlen(filename) + 1];
+    strcpy(filename_copy, filename);
+    for (int i = 0; i < strlen(filename_copy); i++) {
+        filename_copy[i] = toupper(filename_copy[i]);
+    }
+    int i1, j1;
+    struct msdos_dir_entry* dep1;
+    int dep_size1 = sizeof(struct msdos_dir_entry);
+    for (j1 = 0; j1 < size; j1++) {
+        getCluster(fd, cluster, clusterChain[j1]);
+        dep1 = (struct msdos_dir_entry*) cluster;
+        for (i1 = 0; i1 < CLUSTERSIZE; i1 += dep_size1, dep1++) {
+            char name[9], ext[4];
+            strncpy(name, (char*)dep1->name, 8);
+            strncpy(ext, (char*)dep1->name + 8, 3);
+            name[8] = '\0';  // Null-terminate the strings
+            ext[3] = '\0';
+            trimTrailingSpaces(name);
+            char full_filename[13];
+            sprintf(full_filename, "%s.%s", name, ext);  // Combine the name and extension
+
+            if (strcmp(full_filename, filename_copy) == 0) {
+                // This is the directory entry for the file
+                break;
+            }
+        }
+        if (i1 < CLUSTERSIZE) {
+            // Found the directory entry
+            break;
+        }
+    }
+
+    if (j1 != size) {
+        printf("ERROR: This file already exists.\n");
+        return;
+    }
     // Find an empty directory entry
     int i, j;
     struct msdos_dir_entry* dep;
