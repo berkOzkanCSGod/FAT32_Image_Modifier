@@ -872,13 +872,13 @@ void print_FAT_mini(unsigned char* sector) {
 }
 
 void display_help() {
-    printf("Usage: fatmod DISKIMAGE OPTION [PARAMETERS]\n");
-    printf("Options:\n");
-    printf("\t-l                          List the names of the files in the root directory\n");
-    printf("\t-r -a FILENAME              Display the content of the file named FILENAME in ASCII form\n");
-    printf("\t-r -b FILENAME              Display the content of the file named FILENAME in binary form\n");
-    printf("\t-c FILENAME                 Create a file named FILENAME in the root directory\n");
-    printf("\t-d FILENAME                 Delete the file named FILENAME and all its associated data\n");
-    printf("\t-w FILENAME OFFSET N DATA   Write data into the file starting at offset OFFSET\n");
-    printf("\t-h                          Display this help page\n");
+    printf("Usage: ./fatmod [DISKIMAGE] OPTION [PARAMETERS]\n");
+    printf("Operations:\n");
+    printf("\tDISKIMAGE -l                          List the names of the files in the root directory\n");
+    printf("\tDISKIMAGE -r -a FILENAME              Display the content of the file named FILENAME in ASCII form\n");
+    printf("\tDISKIMAGE -r -b FILENAME              Display the content of the file named FILENAME in binary form\n");
+    printf("\tDISKIMAGE -c FILENAME                 Create a file named FILENAME in the root directory\n");
+    printf("\tDISKIMAGE -d FILENAME                 Delete the file named FILENAME and all its associated data\n");
+    printf("\tDISKIMAGE -w FILENAME OFFSET N DATA   Write data into the file starting at offset OFFSET\n");
+    printf("\t-h                                    Display this help page\n");
 }
